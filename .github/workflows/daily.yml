@@ -2,8 +2,10 @@ name: Daily apartment digest
 
 on:
   schedule:
-    # 18:07 UTC = 20:07 שעון חורף / 21:07 שעון קיץ בישראל
-    - cron: "7 18 * * *"
+    # GitHub עובד לפי UTC, ולכן יש שתי ריצות: 15:00 ו-16:00 UTC.
+    # בכל עונה רק אחת מהן יוצאת 18:00 בישראל, והשנייה מדלגת (ראו job "gate").
+    - cron: "0 15 * * *"
+    - cron: "0 16 * * *"
   workflow_dispatch: {}   # כפתור "Run workflow" להרצה ידנית
 
 permissions:
@@ -14,7 +16,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        run: |
+          HOUR=$(TZ=Asia/Jerusalem date +%H)
+          if [ "${{ github.event_name }}" != "schedule" ] || [ "$HOUR" = "18" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Israel time is ${HOUR}:xx – skipping (the other scheduled run handles 18:00)"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   digest:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
