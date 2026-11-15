@@ -1,0 +1,53 @@
+name: Daily apartment digest
+
+on:
+  schedule:
+    # 18:07 UTC = 20:07 שעון חורף / 21:07 שעון קיץ בישראל
+    - cron: "7 18 * * *"
+  workflow_dispatch: {}   # כפתור "Run workflow" להרצה ידנית
+
+permissions:
+  contents: write         # כדי לשמור את state/seen.json (מניעת כפילויות בין ימים)
+
+concurrency:
+  group: apt-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Run agent
+        env:
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python src/main.py
+
+      - name: Keep HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apartments-report
+          path: out/*.html
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Save state
+        run: |
+          git config user.name "apt-agent-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add state/seen.json
+          git diff --cached --quiet || git commit -m "state: $(date -u +%F)"
+          git push

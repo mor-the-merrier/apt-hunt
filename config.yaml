@@ -1,0 +1,37 @@
+# ===== הגדרות סוכן מודעות הדירות =====
+
+# קבוצות פייסבוק ציבוריות לסריקה.
+# מספיק ה-ID (המספר שבכתובת הקבוצה). אפשר גם קישור מלא, ואפשר להוסיף שם לנוחות:
+#   - 123456789
+#   - {id: 123456789, name: "דירות למכירה בגבעתיים"}
+#   - "https://www.facebook.com/groups/some-group-name"
+groups:
+  - 467715841301486
+  - 1308193765888197
+  - 300236187055522
+
+# איסוף (Apify)
+collector:
+  actor: "memo23~facebook-public-group-posts-scraper"
+  hours_back: 26          # חלון זמן (קצת יותר מ-24 שעות; כפילויות מסוננות ממילא)
+  max_posts_per_group: 60 # תקרה לקבוצה בכל ריצה – שומרת על המכסה החינמית
+  run_timeout_minutes: 20
+
+# חילוץ נתונים (Gemini – מכסה חינמית)
+extractor:
+  model: "gemini-flash-latest"
+  batch_size: 10          # כמה פוסטים בכל קריאה למודל
+
+# הפילטר שלנו
+filter:
+  rooms_min: 3
+  rooms_max: 4            # כולל 3.5
+  price_max: 2800000
+  require_mamad: true
+  # אופציונלי – להשאיר ריק אם לא רלוונטי:
+  cities: []              # למשל: ["רמת גן", "גבעתיים"]
+  exclude_brokers: false
+
+# דוח
+report:
+  timezone: "Asia/Jerusalem"
