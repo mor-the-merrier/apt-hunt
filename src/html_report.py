@@ -1,11 +1,9 @@
-"""דוח HTML עצמאי עם שני טאבים: כל הדירות מ-24 השעות האחרונות, ולפי הפילטר.
-
-הטאבים בנויים ב-CSS בלבד (בלי JavaScript), כך שהקובץ נפתח בכל דפדפן ובכל טלפון.
-"""
+"""דוח HTML עצמאי (קובץ אחד, בלי תלויות) עם תוצאות הפילטר: מתאימים + אולי מתאימים."""
 from __future__ import annotations
 
 import html
 from datetime import datetime
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 TYPE_LABEL = {"sale": "מכירה", "rent": "השכרה", None: "לא ברור"}
@@ -74,7 +72,12 @@ def _card(p: dict, tz: ZoneInfo, show_reasons: bool = False) -> str:
     if show_reasons and p.get("reasons"):
         reasons = f'<div class="reasons">⚠️ {_e(", ".join(p["reasons"]))}</div>'
     also = f' · גם ב: {_e(", ".join(p["also_in"]))}' if p.get("also_in") else ""
-    link = f'<a class="btn" href="{_e(p["url"])}" target="_blank" rel="noopener">לפוסט ←</a>' if p.get("url") else ""
+    link = ""
+    if p.get("url"):
+        # fb:// פותח את אפליקציית פייסבוק; הקישור הרגיל נשאר כגיבוי למחשב / אם אין אפליקציה
+        app = "fb://facewebmodal/f?href=" + quote(p["url"], safe="")
+        link = (f'<span class="links"><a class="btn" href="{_e(app)}">פתח באפליקציה</a>'
+                f'<a class="btn alt" href="{_e(p["url"])}" target="_blank" rel="noopener">בדפדפן</a></span>')
     summary = f'<p class="summary">{_e(d["summary"])}</p>' if d.get("summary") and p.get("source") == "llm" else ""
 
     return f"""
@@ -97,18 +100,9 @@ def _section(title: str, posts: list[dict], tz, empty: str, reasons=False) -> st
     return f'<h2>{title} <span class="count">{len(posts)}</span></h2>{body}'
 
 
-def build_html(date_str: str, stats: dict, all_listings, matches, maybes, hidden: int,
-               tz: ZoneInfo, filter_desc: str) -> str:
-    def newest(p):
-        return str(p.get("time") or "")
-
-    tab_all = _section("כל מודעות המכירה החדשות", sorted(all_listings, key=newest, reverse=True), tz,
-                       "לא נמצאו מודעות חדשות ב-24 השעות האחרונות.")
-    if hidden:
-        tab_all += f'<p class="note">{hidden} פוסטים נוספים (השכרה, מחפשי דירה, פרסומות וכדומה) הוסתרו.</p>'
-    tab_filter = (f'<p class="filter">{_e(filter_desc)}</p>'
-                  + _section("מתאימים", matches, tz, "אין היום מודעות שעומדות בכל הקריטריונים.")
-                  + _section("אולי מתאימים – חסר מידע", maybes, tz, "אין.", reasons=True))
+def build_html(date_str: str, stats: dict, matches, maybes, tz: ZoneInfo, filter_desc: str) -> str:
+    body = (_section("מתאימים", matches, tz, "אין היום מודעות שעומדות בכל הקריטריונים.")
+            + _section("אולי מתאימים – חסר מידע", maybes, tz, "אין.", reasons=True))
     warn = f'<p class="note">⚙️ {_e(" | ".join(stats["warnings"]))}</p>' if stats.get("warnings") else ""
 
     return f"""<!DOCTYPE html>
@@ -116,7 +110,7 @@ def build_html(date_str: str, stats: dict, all_listings, matches, maybes, hidden
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>סיכום דירות – {date_str}</title>
+<title>דירות לפי הפילטר – {date_str}</title>
 <style>
   :root {{ --bg:#f5f6f8; --card:#fff; --text:#1d2330; --muted:#6b7385; --line:#e3e6ec;
           --accent:#2457d6; --ok:#1b8a4b; --okbg:#e5f5ec; --maybe:#a26100; --maybebg:#fdf1dc; }}
@@ -129,15 +123,8 @@ def build_html(date_str: str, stats: dict, all_listings, matches, maybes, hidden
   .wrap {{ max-width:760px; margin:0 auto; padding:16px 14px 40px; }}
   header h1 {{ font-size:20px; margin:4px 0; }}
   .stats {{ color:var(--muted); font-size:13px; }}
-  input[name=tab] {{ display:none; }}
-  .tabs {{ display:flex; gap:6px; margin:16px 0 12px; position:sticky; top:0; background:var(--bg);
-          padding:8px 0; z-index:2; }}
-  .tabs label {{ flex:1; text-align:center; padding:10px; border-radius:10px; cursor:pointer;
-                background:var(--card); border:1px solid var(--line); font-weight:600; }}
-  .panel {{ display:none; }}
-  #t1:checked ~ .tabs label[for=t1], #t2:checked ~ .tabs label[for=t2]
-    {{ background:var(--accent); color:#fff; border-color:var(--accent); }}
-  #t1:checked ~ #p1, #t2:checked ~ #p2 {{ display:block; }}
+  .filter {{ display:inline-block; margin:14px 0 0; padding:6px 12px; border-radius:20px;
+             background:var(--card); border:1px solid var(--line); font-size:13px; }}
   h2 {{ font-size:16px; margin:18px 0 8px; }}
   .count {{ background:var(--line); border-radius:20px; padding:0 8px; font-size:13px; }}
   .card {{ background:var(--card); border:1px solid var(--line); border-radius:12px;
@@ -145,7 +132,7 @@ def build_html(date_str: str, stats: dict, all_listings, matches, maybes, hidden
   .top {{ display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }}
   .price {{ font-size:18px; font-weight:700; }}
   .main {{ font-weight:600; margin-top:2px; }}
-  .facts, .meta, .note, .filter {{ color:var(--muted); font-size:13px; }}
+  .facts, .meta, .note {{ color:var(--muted); font-size:13px; }}
   .badge {{ font-size:12px; padding:2px 8px; border-radius:20px; margin-inline-start:4px;
            background:var(--line); }}
   .badge.ok {{ background:var(--okbg); color:var(--ok); }}
@@ -160,22 +147,20 @@ def build_html(date_str: str, stats: dict, all_listings, matches, maybes, hidden
   summary {{ cursor:pointer; color:var(--accent); }}
   .orig {{ white-space:pre-wrap; background:var(--bg); padding:8px; border-radius:8px; }}
   .meta {{ display:flex; justify-content:space-between; align-items:center; margin-top:8px; gap:8px; }}
-  .btn {{ color:var(--accent); text-decoration:none; font-weight:600; white-space:nowrap; }}
+  .links {{ display:flex; gap:6px; flex-shrink:0; }}
+  .btn {{ background:var(--accent); color:#fff; text-decoration:none; font-weight:600; white-space:nowrap;
+         padding:6px 10px; border-radius:8px; font-size:13px; }}
+  .btn.alt {{ background:transparent; color:var(--accent); border:1px solid var(--line); }}
   .empty {{ color:var(--muted); }}
 </style>
 </head>
 <body><div class="wrap">
 <header>
-  <h1>🏠 סיכום דירות – {date_str}</h1>
-  <div class="stats">{stats['groups']} קבוצות · {stats['raw']} פוסטים נסרקו · {stats['unique']} חדשים</div>
+  <h1>🏠 דירות לפי הפילטר – {date_str}</h1>
+  <div class="stats">{stats['groups']} קבוצות · {stats['unique']} פוסטים חדשים נסרקו ·
+    {len(matches)} מתאימים · {len(maybes)} אולי</div>
 </header>
-<input type="radio" name="tab" id="t1" checked>
-<input type="radio" name="tab" id="t2">
-<nav class="tabs">
-  <label for="t1">כל הדירות – 24 שעות ({len(all_listings)})</label>
-  <label for="t2">לפי הפילטר ({len(matches)}{f" + {len(maybes)}" if maybes else ""})</label>
-</nav>
-<section class="panel" id="p1">{tab_all}</section>
-<section class="panel" id="p2">{tab_filter}</section>
+<p class="filter">{_e(filter_desc)}</p>
+{body}
 {warn}
 </div></body></html>"""

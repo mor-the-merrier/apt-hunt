@@ -20,7 +20,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
 from collect import normalize, run_actor  # noqa: E402
-from extract import extract_all  # noqa: E402
+from extract import could_match, extract_all  # noqa: E402
 from filters import evaluate  # noqa: E402
 from html_report import build_html  # noqa: E402
 from report import send_document, send_telegram, short_summary  # noqa: E402
@@ -112,24 +112,24 @@ def main() -> int:
         unique[fp] = p
     new_posts = list(unique.values())
 
-    # 3. חילוץ
+    # 3. סינון מקדים (regex) – רק מועמדים אמיתיים נשלחים ל-Gemini
+    candidates = [p for p in new_posts if could_match(p["text"], cfg["filter"])]
+    print(f"[filter] {len(candidates)} candidates out of {len(new_posts)} new posts", flush=True)
+
+    # 4. חילוץ
     api_key = None if args.no_llm else os.getenv("GEMINI_API_KEY")
     if not args.no_llm and not api_key:
         warnings.append("אין GEMINI_API_KEY – חילוץ בסיסי בלבד")
-    extract_all(new_posts, api_key, cfg["extractor"]["model"], cfg["extractor"].get("batch_size", 10))
-    if any(p.get("source") == "regex" for p in new_posts) and api_key:
-        warnings.append("חלק מהפוסטים נותחו בחילוץ בסיסי (המודל לא זמין)")
+    extract_all(candidates, api_key, cfg["extractor"]["model"], cfg["extractor"].get("batch_size", 20))
+    n_regex = sum(p.get("source") == "regex" for p in candidates)
+    if n_regex and api_key:
+        warnings.append(f"{n_regex} פוסטים נותחו בחילוץ בסיסי (Gemini לא היה זמין)")
 
-    # 4. פילטר
-    matches, maybes, listings = [], [], []
-    hidden = 0
-    for p in new_posts:
+    # 5. פילטר
+    matches, maybes = [], []
+    for p in candidates:
         status, reasons = evaluate(p["data"], cfg["filter"])
         p["status"], p["reasons"] = status, reasons
-        if p["data"].get("type") in ("sale", None):  # רק מכירה (או לא ברור)
-            listings.append(p)
-        else:
-            hidden += 1
         if status == "match":
             matches.append(p)
         elif status == "maybe":
@@ -138,19 +138,19 @@ def main() -> int:
     matches.sort(key=key)
     maybes.sort(key=key)
 
-    # 5. דוח HTML + הודעה קצרה
+    # 6. דוח HTML + הודעה קצרה
     f = cfg["filter"]
-    filter_desc = (f"פילטר: {f['rooms_min']:g}–{f['rooms_max']:g} חדרים · עד {f['price_max']:,} ₪"
+    filter_desc = (f"{f['rooms_min']:g}–{f['rooms_max']:g} חדרים · עד {f['price_max']:,} ₪"
                    + (' · ממ"ד חובה' if f.get("require_mamad") else "")
                    + (f" · ערים: {', '.join(f['cities'])}" if f.get("cities") else ""))
     stats = {"groups": len(groups) or "?", "raw": len(posts), "unique": len(new_posts),
              "warnings": warnings}
     date_str = now.strftime("%d/%m/%Y")
-    page = build_html(date_str, stats, listings, matches, maybes, hidden, tz, filter_desc)
+    page = build_html(date_str, stats, matches, maybes, tz, filter_desc)
     out = ROOT / "out" / f"apartments-{today}.html"
     out.parent.mkdir(exist_ok=True)
     out.write_text(page, encoding="utf-8")
-    text = short_summary(date_str, stats, matches, maybes, len(listings))
+    text = short_summary(date_str, stats, matches, maybes)
 
     if args.dry_run:
         print(text)

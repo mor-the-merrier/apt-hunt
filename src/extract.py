@@ -30,6 +30,10 @@ PROMPT = """אתה מנתח מודעות נדל"ן מקבוצות פייסבוק
 """
 
 
+class QuotaExhausted(Exception):
+    """המכסה היומית של Gemini נגמרה – אין טעם לנסות שוב היום."""
+
+
 def _gemini(api_key: str, model: str, posts: list[dict]) -> list[dict]:
     body = "\n\n".join(f"### פוסט {i}\n{p['text'][:2500]}" for i, p in enumerate(posts))
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -37,12 +41,19 @@ def _gemini(api_key: str, model: str, posts: list[dict]) -> list[dict]:
         "contents": [{"parts": [{"text": PROMPT + body}]}],
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
     }
-    for attempt in range(4):
-        r = requests.post(url, headers={"x-goog-api-key": api_key}, json=payload, timeout=120)
-        if r.status_code == 429 or r.status_code >= 500:  # מגבלת קצב – מחכים ומנסים שוב
-            time.sleep(20 * (attempt + 1))
+    for attempt in range(3):
+        r = requests.post(url, headers={"x-goog-api-key": api_key}, json=payload, timeout=180)
+        if r.status_code == 429:
+            if "PerDay" in r.text or "per day" in r.text.lower():
+                raise QuotaExhausted(r.text[:300])
+            print(f"[extract] rate limited (per-minute), waiting – attempt {attempt + 1}", flush=True)
+            time.sleep(30 * (attempt + 1))
             continue
-        r.raise_for_status()
+        if r.status_code >= 500:
+            time.sleep(10)
+            continue
+        if not r.ok:
+            raise RuntimeError(f"Gemini {r.status_code}: {r.text[:300]}")
         text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
         data = json.loads(text)
         return data if isinstance(data, list) else data.get("posts", [])
@@ -60,7 +71,7 @@ def _to_float(s: str) -> float:
     return float(s.replace(",", "."))
 
 
-def parse_price(text: str) -> int | None:
+def price_candidates(text: str) -> list[int]:
     t = text.replace("₪", ' ש"ח ')
     candidates = []
     for m in re.finditer(_NUM + r"\s*(?:מיליון|מליון|מלי['׳]|M\b|m\b)", t):
@@ -70,16 +81,18 @@ def parse_price(text: str) -> int | None:
         candidates.append(int(re.sub(r"\D", "", m.group(1))))
     for m in re.finditer(r"(?<!\d)(\d{3,4})\s*(?:אלף|א['׳]|K\b)", t):
         candidates.append(int(m.group(1)) * 1000)
-    valid = [p for p in candidates if 300_000 <= p <= 30_000_000]
-    return valid[0] if valid else None
+    return [p for p in candidates if 300_000 <= p <= 30_000_000]
 
 
-def parse_rooms(text: str) -> float | None:
-    m = re.search(_NUM + r"\s*(?:חדרים|חדר|חד['׳\"״]?)", text)
-    if m:
-        return _to_float(m.group(1))
-    m = re.search(r"דירת\s*" + _NUM + r"(?!\s*(?:מ\"ר|מטר|קומ))", text)
-    return _to_float(m.group(1)) if m else None
+def parse_price(text: str) -> int | None:
+    c = price_candidates(text)
+    return c[0] if c else None
+
+
+def rooms_candidates(text: str) -> list[float]:
+    out = [_to_float(m.group(1)) for m in re.finditer(_NUM + r"\s*(?:חדרים|חדר|חד['׳\"״]?)(?!\s*(?:רחצה|שינה|שירותים))", text)]
+    out += [_to_float(m.group(1)) for m in re.finditer(r"דירת\s*" + _NUM + r"(?!\s*(?:מ\"ר|מטר|קומ))", text)]
+    return [r for r in out if 1 <= r <= 12]
 
 
 def regex_extract(text: str) -> dict:
@@ -105,7 +118,7 @@ def regex_extract(text: str) -> dict:
         broker = False
     return {
         "type": kind, "city": None, "neighborhood": None, "street": None,
-        "rooms": parse_rooms(t), "size_sqm": int(m_size.group(1)) if m_size else None,
+        "rooms": (rooms_candidates(t) or [None])[0], "size_sqm": int(m_size.group(1)) if m_size else None,
         "floor": int(m_floor.group(1)) if m_floor else None, "price": parse_price(t),
         "has_mamad": mamad, "parking": True if "חניה" in t or "חנייה" in t else None,
         "elevator": True if "מעלית" in t else None, "broker": broker,
@@ -131,16 +144,39 @@ def _sanitize(d: dict) -> dict:
     return out
 
 
-def extract_all(posts: list[dict], api_key: str | None, model: str, batch_size: int = 10) -> None:
+def could_match(text: str, f: dict) -> bool:
+    """סינון מקדים זהיר ב-regex: פוסל רק כשברור שהמודעה לא מתאימה.
+
+    כך רק מועמדים אמיתיים נשלחים ל-Gemini, וחוסכים במכסה. במקרה של ספק – לא פוסל.
+    """
+    d = regex_extract(text)
+    if d["type"] in ("rent", "wanted"):
+        return False
+    if f.get("require_mamad") and d["has_mamad"] is False:
+        return False
+    rooms = rooms_candidates(text)
+    if rooms and not any(f["rooms_min"] <= r <= f["rooms_max"] for r in rooms):
+        return False
+    prices = price_candidates(text)
+    if prices and min(prices) > f["price_max"]:
+        return False
+    return True
+
+
+def extract_all(posts: list[dict], api_key: str | None, model: str, batch_size: int = 20) -> None:
     """ממלא post['data'] לכל פוסט. אם אין מפתח או שהמודל נכשל – regex."""
     for start in range(0, len(posts), batch_size):
         batch = posts[start:start + batch_size]
+        print(f"[extract] posts {start + 1}-{start + len(batch)} of {len(posts)}", flush=True)
         results = None
         if api_key:
             try:
                 results = _gemini(api_key, model, batch)
+            except QuotaExhausted as e:
+                print(f"[extract] Gemini daily quota exhausted – regex for the rest: {e}", flush=True)
+                api_key = None
             except Exception as e:  # noqa: BLE001
-                print(f"[extract] Gemini failed, using regex: {e}")
+                print(f"[extract] Gemini failed, using regex: {e}", flush=True)
         by_idx = {r.get("idx", i): r for i, r in enumerate(results or [])}
         for i, post in enumerate(batch):
             fallback = regex_extract(post["text"])
@@ -156,4 +192,4 @@ def extract_all(posts: list[dict], api_key: str | None, model: str, batch_size: 
                 post["data"] = _sanitize(fallback)
                 post["source"] = "regex"
         if api_key and start + batch_size < len(posts):
-            time.sleep(5)  # נשארים בתוך מגבלת הבקשות לדקה
+            time.sleep(8)  # נשארים בתוך מגבלת הבקשות לדקה

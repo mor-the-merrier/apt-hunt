@@ -33,11 +33,11 @@ def send_telegram(token: str, chat_id: str, messages: list[str]) -> None:
             raise RuntimeError(f"Telegram error {r.status_code}: {r.text}")
 
 
-def short_summary(date_str: str, stats: dict, matches, maybes, n_all: int) -> str:
+def short_summary(date_str: str, stats: dict, matches, maybes) -> str:
     """הודעת טקסט קצרה שמלווה את קובץ ה-HTML."""
-    lines = [f"🏠 <b>סיכום דירות – {date_str}</b>",
-             f"{n_all} מודעות חדשות ב-24 השעות האחרונות",
-             f"⭐ {len(matches)} מתאימות לפילטר | 🤔 {len(maybes)} אולי"]
+    lines = [f"🏠 <b>דירות לפי הפילטר – {date_str}</b>",
+             f"נסרקו {stats['unique']} פוסטים חדשים",
+             f"⭐ {len(matches)} מתאימות | 🤔 {len(maybes)} אולי (חסר מידע)"]
     for p in matches[:5]:
         d = p["data"]
         rooms = f'{d["rooms"]:g} חד\'' if d.get("rooms") else "? חד'"

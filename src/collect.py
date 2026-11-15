@@ -23,6 +23,8 @@ def run_actor(token: str, cfg: dict, groups: list[dict]) -> list[dict]:
     r.raise_for_status()
     run = r.json()["data"]
     run_id, dataset_id = run["id"], run["defaultDatasetId"]
+    print(f"[apify] started run {run_id} for {len(groups)} groups", flush=True)
+    started = time.time()
 
     deadline = time.time() + 60 * int(c.get("run_timeout_minutes", 20))
     status = run["status"]
@@ -33,6 +35,7 @@ def run_actor(token: str, cfg: dict, groups: list[dict]) -> list[dict]:
         r = requests.get(f"{API}/actor-runs/{run_id}", params=params, timeout=60)
         r.raise_for_status()
         status = r.json()["data"]["status"]
+        print(f"[apify] {status} – {int(time.time() - started)}s", flush=True)
     if status != "SUCCEEDED":
         raise RuntimeError(f"Apify run {run_id} ended with status {status}")
 
@@ -42,7 +45,9 @@ def run_actor(token: str, cfg: dict, groups: list[dict]) -> list[dict]:
         timeout=120,
     )
     r.raise_for_status()
-    return r.json()
+    items = r.json()
+    print(f"[apify] done: {len(items)} items in {int(time.time() - started)}s", flush=True)
+    return items
 
 
 def normalize(item: dict, groups: list[dict]) -> dict | None:

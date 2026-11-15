@@ -20,7 +20,7 @@ collector:
 # חילוץ נתונים (Gemini – מכסה חינמית)
 extractor:
   model: "gemini-flash-latest"
-  batch_size: 10          # כמה פוסטים בכל קריאה למודל
+  batch_size: 20          # כמה פוסטים בכל קריאה למודל
 
 # הפילטר שלנו
 filter:
