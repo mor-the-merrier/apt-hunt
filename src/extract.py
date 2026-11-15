@@ -95,6 +95,62 @@ def rooms_candidates(text: str) -> list[float]:
     return [r for r in out if 1 <= r <= 12]
 
 
+# ---------- מיקום ----------
+
+CITIES = {
+    "כפר סבא": ["כפר סבא", "כפר-סבא", 'כ"ס', "כ״ס"], "רעננה": ["רעננה"], "הוד השרון": ["הוד השרון", 'הוד"ש'],
+    "הרצליה": ["הרצליה"], "רמת השרון": ["רמת השרון"], "נתניה": ["נתניה"], "פתח תקווה": ["פתח תקווה", "פתח תקוה", 'פ"ת', "פ״ת"],
+    "ראש העין": ["ראש העין"], "כוכב יאיר": ["כוכב יאיר", "צור יגאל"], "תל אביב": ["תל אביב", 'ת"א', "ת״א", "תל-אביב"],
+    "רמת גן": ["רמת גן", 'ר"ג', "ר״ג"], "גבעתיים": ["גבעתיים"], "ראשון לציון": ["ראשון לציון", 'ראשל"צ', "ראשל״צ"],
+    "חולון": ["חולון"], "בת ים": ["בת ים"], "רחובות": ["רחובות"], "נס ציונה": ["נס ציונה"], "מודיעין": ["מודיעין"],
+    "ירושלים": ["ירושלים"], "חיפה": ["חיפה"], "באר שבע": ["באר שבע"], "אשדוד": ["אשדוד"], "אשקלון": ["אשקלון"],
+    "בני ברק": ["בני ברק"], "גבעת שמואל": ["גבעת שמואל"], "קריית אונו": ["קריית אונו", "קרית אונו"], "יהוד": ["יהוד"],
+    "אור יהודה": ["אור יהודה"], "לוד": ["לוד"], "רמלה": ["רמלה"], "טייבה": ["טייבה"], "קדימה": ["קדימה", "קדימה צורן"],
+    "אבן יהודה": ["אבן יהודה"], "צור יצחק": ["צור יצחק"], "אלפי מנשה": ["אלפי מנשה"], "שוהם": ["שוהם"], "יבנה": ["יבנה"],
+}
+_STOP = {"עם", "קומה", "דירה", "דירת", "למכירה", "מחיר", "במחיר", "חדרים", "ליד", "קרוב", "מול", "יש", "של",
+         "מוכרים", "מוכר", "בבניין", "בניין", "בית", "פרטי", "ללא", "בלי", "גדולה", "משופצת", "מרווחת", "חדשה"}
+_WORD = r"[א-ת][א-ת'׳\"״\-]*"
+
+
+def _city_aliases():
+    for city, aliases in CITIES.items():
+        for a in aliases:
+            yield city, a
+
+
+def _take_words(rest: str, max_words: int) -> str | None:
+    words = []
+    for w in rest.split():
+        w = w.strip(",.!:;()")
+        if not re.fullmatch(_WORD, w) or w in _STOP or any(w == a.split()[0] or w == "ב" + a.split()[0]
+                                                          for _, a in _city_aliases()):
+            break
+        words.append(w)
+        if len(words) == max_words or re.search(r"[,.!\n]", rest.split(w, 1)[1][:1] or ""):
+            break
+    return " ".join(words) or None
+
+
+def parse_location(text: str) -> tuple[str | None, str | None, str | None]:
+    city = None
+    for name, alias in _city_aliases():
+        if re.search(r"(?<![א-ת])[בלמ]?" + re.escape(alias) + r"(?![א-ת])", text):
+            city = name
+            break
+    hood = None
+    m = re.search(r"(?:שכונת|שכ['׳])\s*([^\n]{0,40})", text)
+    if m:
+        hood = _take_words(m.group(1), 2)
+    elif re.search(r"במרכז\s+(?:ה?עיר|" + "|".join(re.escape(a) for _, a in _city_aliases()) + ")", text):
+        hood = "מרכז"
+    street = None
+    m = re.search(r"(?:ברחוב|רחוב|ברח['׳]|רח['׳])\s*([^\n]{0,40})", text)
+    if m:
+        street = _take_words(m.group(1), 2)
+    return city, hood, street
+
+
 def regex_extract(text: str) -> dict:
     t = text
     if re.search(r"להשכרה|שכירות|לשכירות", t):
@@ -116,8 +172,9 @@ def regex_extract(text: str) -> dict:
     broker = True if re.search(r"תיווך|מתווך|משרד\s*נדל", t) else None
     if re.search(r"(ללא|בלי)\s*(תיווך|מתווכים)|מבעלים|מהבעלים", t):
         broker = False
+    city, hood, street = parse_location(t)
     return {
-        "type": kind, "city": None, "neighborhood": None, "street": None,
+        "type": kind, "city": city, "neighborhood": hood, "street": street,
         "rooms": (rooms_candidates(t) or [None])[0], "size_sqm": int(m_size.group(1)) if m_size else None,
         "floor": int(m_floor.group(1)) if m_floor else None, "price": parse_price(t),
         "has_mamad": mamad, "parking": True if "חניה" in t or "חנייה" in t else None,
