@@ -6,7 +6,12 @@ on:
     # בכל עונה רק אחת מהן יוצאת 18:00 בישראל, והשנייה מדלגת (ראו job "gate").
     - cron: "0 15 * * *"
     - cron: "0 16 * * *"
-  workflow_dispatch: {}   # כפתור "Run workflow" להרצה ידנית
+  workflow_dispatch:      # כפתור "Run workflow" להרצה ידנית
+    inputs:
+      test_run:
+        description: "ריצת בדיקה – מציג את כל הפוסטים מה-24 שעות האחרונות ולא משפיע על הריצה היומית"
+        type: boolean
+        default: false
 
 permissions:
   contents: write         # כדי לשמור את state/seen.json (מניעת כפילויות בין ימים)
@@ -52,6 +57,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TEST_RUN: ${{ inputs.test_run || false }}
         run: python src/main.py
 
       - name: Keep HTML report
@@ -64,6 +70,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Save state
+        if: ${{ !inputs.test_run }}
         run: |
           git config user.name "apt-agent-bot"
           git config user.email "actions@users.noreply.github.com"

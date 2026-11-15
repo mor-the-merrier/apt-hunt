@@ -56,7 +56,10 @@ def main() -> int:
     ap.add_argument("--input", help="קובץ JSON של פוסטים גולמיים במקום Apify (לבדיקות)")
     ap.add_argument("--dry-run", action="store_true", help="הדפסה במקום שליחה, בלי לעדכן state")
     ap.add_argument("--no-llm", action="store_true", help="חילוץ ב-regex בלבד")
+    ap.add_argument("--test", action="store_true",
+                    help="ריצת בדיקה: מתעלם מהזיכרון של מה שכבר דווח ולא מעדכן אותו")
     args = ap.parse_args()
+    test_run = args.test or os.getenv("TEST_RUN", "").lower() == "true"
 
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
     groups = []
@@ -94,7 +97,7 @@ def main() -> int:
     posts = [p for p in (normalize(i, groups) for i in raw) if p]
 
     # 2. כפילויות: מול ריצות קודמות ובין קבוצות
-    state = load_state()
+    state = {"ids": {}, "fps": {}} if test_run else load_state()
     unique: dict[str, dict] = {}
     for p in posts:
         fp = fingerprint(p["text"])
@@ -145,7 +148,7 @@ def main() -> int:
                    + (f" · ערים: {', '.join(f['cities'])}" if f.get("cities") else ""))
     stats = {"groups": len(groups) or "?", "raw": len(posts), "unique": len(new_posts),
              "warnings": warnings}
-    date_str = now.strftime("%d/%m/%Y")
+    date_str = now.strftime("%d/%m/%Y") + (" 🧪 ריצת בדיקה" if test_run else "")
     page = build_html(date_str, stats, matches, maybes, tz, filter_desc)
     out = ROOT / "out" / f"apartments-{today}.html"
     out.parent.mkdir(exist_ok=True)
@@ -159,6 +162,9 @@ def main() -> int:
     send_telegram(tg_token, tg_chat, [text])
     send_document(tg_token, tg_chat, out.name, page)
 
+    if test_run:
+        print("[test] state not updated", flush=True)
+        return 0
     for p in posts:
         state["ids"][p["id"]] = today
     for p in new_posts:
